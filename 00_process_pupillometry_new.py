@@ -21,10 +21,12 @@ from scipy.signal import medfilt
 import numpy as np
 import seaborn as sns
 
+# Say 'all' to analyse all data
+subjects = ['9991', '9992']
 
-subjects = ['1122']
+# These functions were experimental. Only using a couple of them.
 
-
+# This function gets used later
 def moving_window_3sd_with_times(data, times, window_size):
     # Convert the input data and times to numpy arrays if they are not already
     data = np.array(data, dtype=float)
@@ -204,6 +206,7 @@ def threshold_outlier_filter(data, threshold=3):
     filtered_data = np.where(mask, np.nan, data)
     return filtered_data
 
+# This function gets used
 def detect_interpolated_segments(pupil_data, window_size=20, r_squared_threshold=.9999):
     """
     Detects likely interpolated segments in pupil size data based on linear patterns.
@@ -239,6 +242,7 @@ datastore = pl.Path(r"C:\Users\experiment\Documents\RetinaWISE\Results")
 # Get the files
 files = list(datastore.rglob("*/Experiment_0001/data*.csv"))
 
+# Filter the list of files so we are analysing what we specified at the top of the script
 if isinstance(subjects, list):
     compiled_patterns = [re.compile(fr'_{pattern}\\') for pattern in subjects]
     files = [
@@ -251,10 +255,12 @@ elif subjects == 'all':
 # Loop over the files
 for fpath in files:
     # Pull out some info from the filename
-    subject = re.findall(r'_(\d{4})\\E', str(fpath))[0]
-    age = re.findall(r'_(\d{2})_', str(fpath))[0]
-    protocol = re.findall(r'HELIOS_([A-Z]+)', str(fpath))[0]
+    subject = re.findall(r'_(\d{4})\\E', str(fpath))[0]  # Extract subject id from filename with regex
+    age = re.findall(r'_(\d{2})_', str(fpath))[0]  # As above but for age
+    protocol = re.findall(r'SHINE_([A-Z]+)', str(fpath))[0]  # As above but for the protocol
     
+    #include regex to extract session
+    #session = re.findall(r'_\d{4}_(\d)\\E', str(fpath))[0]
     print('*******************')
     print(f'Subject: {subject}')
     print(f'Protocol: {protocol}')
@@ -269,14 +275,14 @@ for fpath in files:
         shutil.rmtree(out_dir)
     out_dir.mkdir(exist_ok=True)    
 
-    # temp
+    # temp - getting rid of directory if it already exists
     temp_out_dir = subject_dir / 'out'
     if temp_out_dir.exists():
         shutil.rmtree(temp_out_dir)    
     
     # Load pupil data
     df = pd.read_csv(fpath, sep=";")
-    dfr = df.loc[df["Right - Is found"] == True]
+    dfr = df.loc[df["Right - Is found"] == True] # loading data where pupil was tracking 
     dfl = df.loc[df["Left - Is found"] == True]
 
     # Plot the raw traces
@@ -305,7 +311,8 @@ for fpath in files:
         )
 
     # Specify new times for pupil data
-    newt = np.linspace(-1, 17.0, 18 * 50) 
+    # interpolation because the data is not evenly spaced
+    newt = np.linspace(-1, 17.0, 18 * 50) # will use this further down in the script
     dfs = []
     trial = 0
     for si in sequence_indices:
@@ -313,7 +320,7 @@ for fpath in files:
         sequence_data = dfr.loc[dfr["Sequence index"] == si]
         # Get the label from original df
         try:
-            # Get the condition label
+            # Get the condition label - excitationlabel for relevant seq index
             label = df.loc[
                 (
                     (df["Sequence index"] == si)
@@ -326,12 +333,12 @@ for fpath in files:
                 "Excitation label - Right",
             ].iloc[0]
             
-            # Get the baseline
+            # Get the baseline (-1 to 1 sec average before light pulse)
             baseline = sequence_data.loc[
                 sequence_data["Excitation label - Right"] == "baseline", "Right - Size Mm"
             ].mean()
             
-            # Get the times
+            # Get the times from device
             times = dfr.loc[dfr["Sequence index"] == si, "Sequence time Sec"]
             
             # Get pupil size mm and pupil size percent change
@@ -341,6 +348,7 @@ for fpath in files:
             # These are spurious samples caused by imperfect pupil tracking.
             pupil, times, removed_pupil, removed_times = moving_window_3sd_with_times(pupil, times, window_size=100)
             
+            # The baselie pupil becomes 100% and the change is pupil size is expressed relative to this 100%
             base_corrected_pupil = (
                 dfr.loc[dfr["Sequence index"] == si,
                         "Right - Size Mm"] / baseline * 100
@@ -353,7 +361,7 @@ for fpath in files:
                     & (df["Excitation label - Right"] == label)
                 )
             ].iloc[0]["Sequence time Sec"]
-            times = times - on
+            times = times - on  # Set zero to stimulus onset
             
             # Interpolate to new times
             fp = scp.interpolate.interp1d(times, pupil, fill_value="extrapolate")
@@ -362,7 +370,7 @@ for fpath in files:
             newp = fp(newt)
             newbp = fbp(newt)
 
-            # Filter, cutoff is 4/(sample_rate/2)
+            # Filter, cutoff is 4/(sample_rate/2) - This doesn't make much difference
             B, A = scp.signal.butter(3, 4 / (50 / 2), output="BA")
             filt_newp = scp.signal.filtfilt(B, A, newp)
             filt_newbp = scp.signal.filtfilt(B, A, newbp)
@@ -424,6 +432,8 @@ for fpath in files:
     gdf = pd.concat(dfs).reset_index(drop=True)
     gdf.to_csv(out_dir / f"processed_{protocol}_PLRs_{subject}.csv")
     
+    # Excluding trials that have more than 30% interpolated data from the plot
+    # The data still gets saved in the csv though!
     gdf = gdf.query("(baseline.notna()) and (pct_interpolated < .3)")
 
     # Make plots
